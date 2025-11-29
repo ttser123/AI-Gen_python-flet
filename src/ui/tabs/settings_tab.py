@@ -1,8 +1,8 @@
 import flet as ft
-from src.core.config import SUPPORTED_MODELS
+from src.core.config import AI_MODELS_MAP, IMAGE_GEN_MODELS_MAP
 from src.ui.components.toast import CustomToast
-from src.core.key_manager import save_api_key, get_api_key
-from src.core.styles import AppStyle  # Import
+from src.core.key_manager import save_api_keys, get_api_keys
+from src.core.styles import AppStyle
 
 
 class SettingsTab(ft.Column):
@@ -13,20 +13,25 @@ class SettingsTab(ft.Column):
         self.scroll = ft.ScrollMode.AUTO
         self.toast = CustomToast(page)
 
-        # UI Components
-        self.gemini_key_field = ft.TextField(
-            label="Gemini API Key",
+        # --- 1. API Configuration Section ---
+        self.text_key_field = ft.TextField(
+            label="Gemini Text API Key",
             password=True,
             can_reveal_password=True,
             icon=ft.Icons.KEY,
-            helper_text="Key จะถูกบันทึกไว้ในไฟล์ api_key.json ที่โฟลเดอร์โปรเจกต์",
+            border_color=AppStyle.BORDER_DIM,
+            width=500,
+            helper_text="สำหรับสร้าง Prompt (Step 1)",
         )
 
-        self.openai_key_field = ft.TextField(
-            label="OpenAI API Key (Coming Soon)",
+        self.image_key_field = ft.TextField(
+            label="Gemini Image API Key",
             password=True,
-            disabled=True,
-            icon=ft.Icons.LOCK_CLOCK,
+            can_reveal_password=True,
+            icon=ft.Icons.IMAGE,
+            border_color=AppStyle.BORDER_DIM,
+            width=500,
+            helper_text="สำหรับสร้างรูปภาพ (Step 2) - ใช้ Key เดียวกับ Text ได้",
         )
 
         self.save_btn = ft.ElevatedButton(
@@ -34,40 +39,53 @@ class SettingsTab(ft.Column):
             icon=AppStyle.ICON_SAVE,
             on_click=self.show_confirm_dialog,
             style=ft.ButtonStyle(
-                bgcolor=AppStyle.BTN_PRIMARY, color=AppStyle.BTN_ON_PRIMARY  # สีปุ่มหลัก
+                bgcolor=AppStyle.BTN_PRIMARY, color=AppStyle.BTN_ON_PRIMARY
             ),
         )
 
-        model_rows = [
-            ft.DataRow(cells=[ft.DataCell(ft.Text(model))])
-            for model in SUPPORTED_MODELS
-        ]
+        # --- 2. Model Status Section (สร้างอัตโนมัติจาก Config) ---
 
-        self.model_table = ft.DataTable(
-            columns=[ft.DataColumn(ft.Text("Supported AI Models"))],
-            rows=model_rows,
-            border=ft.border.all(1, AppStyle.BORDER_DIM),
-            vertical_lines=ft.border.BorderSide(1, AppStyle.BORDER_DIM),
-            horizontal_lines=ft.border.BorderSide(1, AppStyle.BORDER_DIM),
+        # ตารางสำหรับ Text Models
+        self.text_model_table = self.create_model_table(
+            AI_MODELS_MAP, "Text Generation Models"
         )
 
+        # ตารางสำหรับ Image Models
+        self.image_model_table = self.create_model_table(
+            IMAGE_GEN_MODELS_MAP, "Image Generation Models"
+        )
+
+        # --- Layout ---
         self.controls = [
             ft.Container(height=20),
             ft.Text("API Configuration", size=20, weight=ft.FontWeight.BOLD),
-            self.gemini_key_field,
-            self.openai_key_field,
             ft.Container(height=10),
+            self.text_key_field,
+            ft.Container(height=10),
+            self.image_key_field,
+            ft.Container(height=20),
             self.save_btn,
-            ft.Divider(height=40, thickness=2),
-            ft.Text("Model Status", size=20, weight=ft.FontWeight.BOLD),
-            ft.Text("รายชื่อโมเดลที่รองรับ:", size=12, color=AppStyle.TEXT_SECONDARY),
-            self.model_table,
+            ft.Divider(height=40, thickness=1),
+            ft.Text(
+                "System Status & Supported Models", size=20, weight=ft.FontWeight.BOLD
+            ),
+            ft.Text(
+                "รายชื่อโมเดลที่ระบบรองรับ",
+                size=12,
+                color=AppStyle.TEXT_SECONDARY,
+            ),
+            ft.Container(height=20),
+            self.text_model_table,
+            ft.Container(height=20),
+            self.image_model_table,
+            ft.Container(height=50),  # Padding ล่าง
         ]
 
+        # Dialogs & Data Load
         self.confirm_dialog = ft.AlertDialog(
             modal=True,
             title=ft.Text("ยืนยันการบันทึก"),
-            content=ft.Text("ต้องการบันทึก API Key ลงไฟล์ api_key.json หรือไม่?"),
+            content=ft.Text("ต้องการบันทึก API Keys ลงไฟล์ในเครื่องหรือไม่?"),
             actions=[
                 ft.TextButton("ยกเลิก", on_click=self.close_dialog),
                 ft.TextButton(
@@ -80,15 +98,68 @@ class SettingsTab(ft.Column):
         )
         self.load_initial_data()
 
-    # ... (Logic เหมือนเดิม Copy ได้เลย) ...
+    # --- Helper: ฟังก์ชันสร้างตารางอัตโนมัติ ---
+    def create_model_table(self, data_map, title):
+        rows = []
+        for provider, models in data_map.items():
+            for m in models:
+                rows.append(
+                    ft.DataRow(
+                        cells=[
+                            ft.DataCell(
+                                ft.Text(provider, weight=ft.FontWeight.BOLD)
+                            ),  # Provider
+                            ft.DataCell(ft.Text(m["name"])),  # Model Name (Display)
+                            ft.DataCell(
+                                ft.Text(
+                                    m["id"],
+                                    font_family="monospace",
+                                    size=12,
+                                    color=AppStyle.TEXT_SECONDARY,
+                                )
+                            ),  # Model ID
+                        ]
+                    )
+                )
+
+        # สร้าง DataTable Container
+        return ft.Column(
+            [
+                ft.Row(
+                    [
+                        ft.Icon(ft.Icons.LIST_ALT, color=AppStyle.TEXT_SECONDARY),
+                        ft.Text(
+                            title,
+                            weight=ft.FontWeight.BOLD,
+                            size=16,
+                            color=AppStyle.BTN_PRIMARY,
+                        ),
+                    ]
+                ),
+                ft.DataTable(
+                    columns=[
+                        ft.DataColumn(ft.Text("Provider")),
+                        ft.DataColumn(ft.Text("Model Name")),
+                        ft.DataColumn(ft.Text("Internal ID")),
+                    ],
+                    rows=rows,
+                    border=ft.border.all(1, AppStyle.BORDER_DIM),
+                    vertical_lines=ft.border.BorderSide(1, AppStyle.BORDER_DIM),
+                    horizontal_lines=ft.border.BorderSide(1, AppStyle.BORDER_DIM),
+                    width=float("inf"),  # ขยายเต็มจอ
+                ),
+            ]
+        )
+
+    # --- Save/Load Logic ---
     def load_initial_data(self):
-        key = get_api_key()
-        if key:
-            self.gemini_key_field.value = key
+        keys = get_api_keys()
+        self.text_key_field.value = keys.get("gemini_text_key", "")
+        self.image_key_field.value = keys.get("gemini_image_key", "")
 
     def show_confirm_dialog(self, e):
-        if not self.gemini_key_field.value:
-            self.toast.show("กรุณากรอก Gemini API Key ก่อนครับ", is_error=True)
+        if not self.text_key_field.value:
+            self.toast.show("กรุณากรอก Text API Key อย่างน้อย 1 ช่อง", is_error=True)
             return
         self.page.open(self.confirm_dialog)
 
@@ -97,8 +168,16 @@ class SettingsTab(ft.Column):
 
     def save_settings(self, e):
         self.page.close(self.confirm_dialog)
-        success = save_api_key(self.gemini_key_field.value)
+
+        txt_key = self.text_key_field.value
+        # Auto-fill ถ้าช่อง Image ว่าง
+        img_key = self.image_key_field.value if self.image_key_field.value else txt_key
+
+        success = save_api_keys(txt_key, img_key)
+
         if success:
-            self.toast.show("บันทึก API Key ลงไฟล์เรียบร้อยแล้ว!")
+            self.toast.show("บันทึก API Keys เรียบร้อยแล้ว!")
+            self.image_key_field.value = img_key
+            self.update()
         else:
             self.toast.show("เกิดข้อผิดพลาดในการบันทึกไฟล์", is_error=True)

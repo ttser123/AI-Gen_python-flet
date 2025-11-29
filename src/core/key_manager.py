@@ -1,30 +1,37 @@
 import json
 import os
 
-# ชื่อไฟล์ที่จะเก็บไว้หน้าบ้าน (Root Folder)
 KEY_FILE = "api_key.json"
 
 
-def save_api_key(api_key: str):
-    """บันทึก API Key ลงไฟล์ JSON"""
-    data = {"gemini_api_key": api_key}
+def save_api_keys(text_key: str, image_key: str):
+    """บันทึก API Key แยกกันระหว่าง Text และ Image"""
+    data = {"gemini_text_key": text_key, "gemini_image_key": image_key}
     try:
         with open(KEY_FILE, "w", encoding="utf-8") as f:
             json.dump(data, f)
         return True
     except Exception as e:
-        print(f"Error saving key: {e}")
+        print(f"Error saving keys: {e}")
         return False
 
 
-def get_api_key():
-    """อ่าน API Key จากไฟล์ JSON"""
+def get_api_keys():
+    """อ่าน API Keys ทั้งหมด (คืนค่าเป็น Dict)"""
     if not os.path.exists(KEY_FILE):
-        return None
+        return {}
     try:
         with open(KEY_FILE, "r", encoding="utf-8") as f:
             data = json.load(f)
-            return data.get("gemini_api_key")
+
+            # --- Migration Logic ---
+            # ถ้าเป็นไฟล์เวอร์ชันเก่าที่มีแค่ 'gemini_api_key'
+            # ให้ถือว่าใช้ Key เดียวกันทั้งคู่ไปก่อน
+            if "gemini_api_key" in data and "gemini_text_key" not in data:
+                old_key = data["gemini_api_key"]
+                return {"gemini_text_key": old_key, "gemini_image_key": old_key}
+
+            return data
     except Exception as e:
-        print(f"Error reading key: {e}")
-        return None
+        print(f"Error reading keys: {e}")
+        return {}

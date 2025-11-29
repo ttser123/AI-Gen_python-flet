@@ -2,6 +2,9 @@ import flet as ft
 from src.ui.main_layout import get_main_layout
 from src.core.config import APP_TITLE
 from src.core.theme_manager import load_theme  # Import
+import google.generativeai as genai
+
+print(f"Current genai version: {genai.__version__}")
 
 
 def main(page: ft.Page):

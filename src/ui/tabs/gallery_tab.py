@@ -4,9 +4,10 @@ from src.core.history_manager import (
     delete_history_item,
     clear_all_history,
 )
+from src.core.styles import AppStyle
 from src.ui.components.toast import CustomToast
 from src.ui.components.prompt_box import PromptBox
-from src.core.styles import AppStyle  # Import
+from src.logic.zip_manager import create_zip_from_history_item
 
 
 class GalleryTab(ft.Column):
@@ -17,6 +18,9 @@ class GalleryTab(ft.Column):
         self.scroll = ft.ScrollMode.AUTO
         self.toast = CustomToast(page)
         self.item_to_delete = None
+        self.item_to_zip = None
+
+        self.save_zip_picker = ft.FilePicker(on_result=self.on_save_zip_result)
 
         self.history_list = ft.Column(spacing=20)
         self.no_data_text = ft.Text(
@@ -26,17 +30,13 @@ class GalleryTab(ft.Column):
         self.clear_btn = ft.ElevatedButton(
             "Clear All",
             icon=AppStyle.ICON_DELETE,
-            style=ft.ButtonStyle(
-                bgcolor=AppStyle.BTN_DANGER,  # สีแดง Error
-                color="onError",  # ตัวหนังสือบนสีแดง
-            ),
+            style=ft.ButtonStyle(bgcolor=AppStyle.BTN_DANGER, color="onError"),
             on_click=self.show_clear_all_dialog,
         )
-
         self.refresh_btn = ft.IconButton(
             icon=AppStyle.ICON_REFRESH,
             tooltip="โหลดข้อมูลใหม่",
-            icon_color=AppStyle.BTN_PRIMARY,  # สี Primary
+            icon_color=AppStyle.BTN_PRIMARY,
             on_click=lambda _: self.refresh_gallery(),
         )
 
@@ -60,13 +60,13 @@ class GalleryTab(ft.Column):
             self.history_list,
         ]
 
-        # ... (Dialogs Code เหมือนเดิม ไม่ต้องแก้) ...
+        # Dialogs
         self.delete_confirm_dialog = ft.AlertDialog(
             modal=True,
             title=ft.Text("ยืนยันการลบ"),
             content=ft.Text("คุณต้องการลบรายการนี้ใช่หรือไม่?"),
             actions=[
-                ft.TextButton("ยกเลิก", on_click=self.close_dialog),  # สี default
+                ft.TextButton("ยกเลิก", on_click=self.close_dialog),
                 ft.TextButton(
                     "ลบ",
                     on_click=self.confirm_delete_item,
@@ -75,7 +75,6 @@ class GalleryTab(ft.Column):
             ],
             actions_alignment=ft.MainAxisAlignment.END,
         )
-
         self.clear_all_confirm_dialog = ft.AlertDialog(
             modal=True,
             title=ft.Text("ยืนยันการลบทั้งหมด"),
@@ -91,9 +90,22 @@ class GalleryTab(ft.Column):
             actions_alignment=ft.MainAxisAlignment.END,
         )
 
-    # ... (Logic เหมือนเดิม) ...
     def did_mount(self):
+        # 1. Register Pickers
+        self.page.overlay.append(self.save_zip_picker)
+        # 2. โหลดข้อมูลครั้งแรก
         self.refresh_gallery()
+        # 3. --- เริ่มฟังคำสั่ง Update (Subscribe) ---
+        self.page.pubsub.subscribe(self.on_message)
+
+    def will_unmount(self):
+        # เลิกฟังเมื่อ Tab ถูกทำลาย (Good Practice)
+        self.page.pubsub.unsubscribe_all()
+
+    def on_message(self, message):
+        # ถ้าได้รับสัญญาณ "refresh_gallery" ให้โหลดใหม่ทันที
+        if message == "refresh_gallery":
+            self.refresh_gallery()
 
     def refresh_gallery(self):
         self.history_list.controls.clear()
@@ -111,10 +123,22 @@ class GalleryTab(ft.Column):
 
     def create_history_card(self, item):
         prompts_col = ft.Column()
+        img_map = {}
+        if "generated_images" in item:
+            for img in item["generated_images"]:
+                img_map[img["index"]] = img["path"]
+
         for i, p in enumerate(item["prompts"]):
-            prompts_col.controls.append(
-                PromptBox(self.page, prompt_text=p, index=i + 1)
-            )
+            idx = i + 1
+            pbox = PromptBox(self.page, prompt_text=p, index=idx)
+            if idx in img_map:
+                try:
+                    with open(img_map[idx], "rb") as f:
+                        img_bytes = f.read()
+                        pbox.set_image(img_bytes, run_update=False)
+                except:
+                    pass
+            prompts_col.controls.append(pbox)
 
         card = ft.Card(
             content=ft.Container(
@@ -142,19 +166,31 @@ class GalleryTab(ft.Column):
                                                 size=10,
                                                 color="onSecondaryContainer",
                                             ),
-                                            bgcolor="secondaryContainer",  # สีพื้นหลัง Tag
+                                            bgcolor="secondaryContainer",
                                             padding=5,
                                             border_radius=5,
                                         ),
                                     ]
                                 ),
-                                ft.IconButton(
-                                    AppStyle.ICON_DELETE,
-                                    icon_color=AppStyle.BTN_DANGER,
-                                    tooltip="ลบรายการนี้",
-                                    on_click=lambda e: self.show_delete_dialog(
-                                        item["id"]
-                                    ),
+                                ft.Row(
+                                    [
+                                        ft.IconButton(
+                                            ft.Icons.FOLDER_ZIP,
+                                            icon_color=AppStyle.BTN_PRIMARY,
+                                            tooltip="Download Project ZIP",
+                                            on_click=lambda e: self.download_project_zip(
+                                                item
+                                            ),
+                                        ),
+                                        ft.IconButton(
+                                            AppStyle.ICON_DELETE,
+                                            icon_color=AppStyle.BTN_DANGER,
+                                            tooltip="ลบรายการนี้",
+                                            on_click=lambda e: self.show_delete_dialog(
+                                                item["id"]
+                                            ),
+                                        ),
+                                    ]
                                 ),
                             ],
                             alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
@@ -170,7 +206,7 @@ class GalleryTab(ft.Column):
                         ft.Container(height=10),
                         ft.ExpansionTile(
                             title=ft.Text(
-                                f"View {len(item['prompts'])} Prompts",
+                                f"View {len(item['prompts'])} Prompts & Images",
                                 color=AppStyle.BTN_PRIMARY,
                             ),
                             controls=[prompts_col],
@@ -182,7 +218,18 @@ class GalleryTab(ft.Column):
         )
         return card
 
-    # ... (Dialog Handling functions Copy from previous turn) ...
+    # ... (Logic Zip และ Dialogs เหมือนเดิม ไม่มีการเปลี่ยนแปลง) ...
+    def download_project_zip(self, item):
+        self.item_to_zip = item
+        filename = f"project_{item['id']}.zip"
+        self.save_zip_picker.save_file(file_name=filename, allowed_extensions=["zip"])
+
+    def on_save_zip_result(self, e):
+        if e.path and self.item_to_zip:
+            success, msg = create_zip_from_history_item(e.path, self.item_to_zip)
+            self.toast.show(msg, is_error=not success)
+            self.item_to_zip = None
+
     def close_dialog(self, e):
         self.page.close(self.delete_confirm_dialog)
         self.page.close(self.clear_all_confirm_dialog)

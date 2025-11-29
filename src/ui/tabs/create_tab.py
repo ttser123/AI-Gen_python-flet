@@ -1,11 +1,26 @@
 import flet as ft
-from src.core.config import AI_MODELS_MAP
+import asyncio
+
+# Logic & Utils
+from src.core.key_manager import get_api_keys
+from src.core.history_manager import (
+    save_to_history,
+    update_history_images,
+    get_latest_history_id,
+)
+from src.core.styles import AppStyle
+from src.logic.zip_manager import create_images_zip, create_project_zip
+
+# Providers
 from src.logic.providers.gemini_provider import GeminiProvider
+from src.logic.image_providers.gemini_image import GeminiImageProvider
+from src.logic.image_providers.pollinations import PollinationsProvider
+
+# Components & Parts
 from src.ui.components.toast import CustomToast
-from src.core.key_manager import get_api_key
-from src.core.history_manager import save_to_history
 from src.ui.components.prompt_box import PromptBox
-from src.core.styles import AppStyle  # Import Style
+from src.ui.tabs.parts.input_part import InputPart
+from src.ui.tabs.parts.config_part import ConfigPart
 
 
 class CreateTab(ft.Column):
@@ -15,143 +30,62 @@ class CreateTab(ft.Column):
         self.expand = True
         self.scroll = ft.ScrollMode.AUTO
 
+        # Init Services
         self.gemini_provider = GeminiProvider()
+        self.gemini_image_provider = GeminiImageProvider()
+        self.pollinations_provider = PollinationsProvider()
         self.toast = CustomToast(page)
-        self.selected_files = []
+        self.current_history_id = None  # เก็บ ID ประวัติปัจจุบัน
 
-        # --- UI Components ---
-        self.file_picker = ft.FilePicker(on_result=self.on_file_picked)
+        # --- Instantiate UI Parts ---
+        self.input_part = InputPart(page, self.on_file_picked)
+        self.config_part = ConfigPart(self.on_click_generate, self.on_click_gen_images)
 
-        self.upload_btn = ft.ElevatedButton(
-            "เลือกรูปภาพ (Max 2)",
-            icon=AppStyle.ICON_IMAGE,
-            on_click=lambda _: self.file_picker.pick_files(
-                allow_multiple=True, allowed_extensions=["png", "jpg", "jpeg", "webp"]
+        # Zip Pickers
+        self.save_all_images_picker = ft.FilePicker(
+            on_result=self.on_save_all_images_result
+        )
+        self.save_project_zip_picker = ft.FilePicker(
+            on_result=self.on_save_project_zip_result
+        )
+
+        # Output Section
+        self.download_all_btn = ft.ElevatedButton(
+            "Download Images (ZIP)",
+            icon=ft.Icons.PHOTO_LIBRARY,
+            on_click=lambda _: self.save_all_images_picker.save_file(
+                "images.zip", allowed_extensions=["zip"]
             ),
-            # ใช้สี Secondary Container แทน Hardcode
+            visible=False,
+        )
+        self.download_project_btn = ft.ElevatedButton(
+            "Download Project (ZIP)",
+            icon=ft.Icons.FOLDER_ZIP,
             style=ft.ButtonStyle(
-                bgcolor=AppStyle.BTN_SECONDARY, color="onSecondaryContainer"
+                bgcolor=AppStyle.BTN_PRIMARY, color=AppStyle.BTN_ON_PRIMARY
             ),
-        )
-        self.image_preview_row = ft.Row(scroll=ft.ScrollMode.AUTO)
-
-        self.prompt_input = ft.TextField(
-            label="รายละเอียดสิ่งที่อยากได้ (Input)",
-            multiline=True,
-            min_lines=3,
-            max_lines=5,
-            hint_text="เช่น สินค้าวางอยู่บนโต๊ะไม้, แสงธรรมชาติ...",
-            border_color=AppStyle.BORDER_DIM,  # ใช้สีขอบระบบ
-        )
-
-        # ... (Dropdowns Code เหมือนเดิม) ...
-        self.style_dropdown = ft.Dropdown(
-            label="Style",
-            options=[
-                ft.dropdown.Option("Photorealistic"),
-                ft.dropdown.Option("Cinematic"),
-                ft.dropdown.Option("Anime"),
-                ft.dropdown.Option("Comic Book"),
-                ft.dropdown.Option("3D Render"),
-            ],
-            value="Photorealistic",
-            expand=True,
-        )
-
-        self.ratio_dropdown = ft.Dropdown(
-            label="Aspect Ratio",
-            options=[
-                ft.dropdown.Option("1:1"),
-                ft.dropdown.Option("16:9"),
-                ft.dropdown.Option("9:16"),
-            ],
-            value="1:1",
-            expand=True,
-        )
-
-        provider_options = list(AI_MODELS_MAP.keys())
-        self.provider_dropdown = ft.Dropdown(
-            label="1. เลือก Provider",
-            options=[ft.dropdown.Option(p) for p in provider_options],
-            value=provider_options[0],
-            on_change=self.on_provider_change,
-            expand=True,
-        )
-
-        initial_models = AI_MODELS_MAP[provider_options[0]]
-        self.model_dropdown = ft.Dropdown(
-            label="2. เลือก Model",
-            options=[ft.dropdown.Option(m) for m in initial_models],
-            value=initial_models[0],
-            expand=True,
-        )
-
-        self.count_slider = ft.Slider(
-            min=1,
-            max=30,
-            divisions=29,
-            value=3,
-            label="{value} Prompts",
-            on_change=self.on_slider_change,
-            active_color=AppStyle.BTN_PRIMARY,  # สี Slider ตามธีม
-        )
-        self.count_label = ft.Text("จำนวน: 3")
-
-        self.generate_btn = ft.ElevatedButton(
-            text="Generate Prompts",
-            icon=AppStyle.ICON_GENERATE,
-            style=ft.ButtonStyle(
-                bgcolor=AppStyle.BTN_PRIMARY,  # สีปุ่มหลัก
-                color=AppStyle.BTN_ON_PRIMARY,  # สีตัวหนังสือบนปุ่ม
-                padding=20,
+            on_click=lambda _: self.save_project_zip_picker.save_file(
+                "project.zip", allowed_extensions=["zip"]
             ),
-            on_click=self.on_click_generate,
-            width=200,
+            visible=False,
         )
 
         self.progress_bar = ft.ProgressBar(visible=False, color=AppStyle.LOADING)
         self.status_text = ft.Text("", color=AppStyle.TEXT_SECONDARY)
-        self.output_list = ft.Column(spacing=10)
+        self.output_list = ft.Column(spacing=15)
 
+        # --- Layout Assembly ---
         self.controls = [
             ft.Container(height=10),
             ft.Card(
-                # Card ไม่ต้องกำหนดสีพื้นหลัง Flet จะใช้ surfaceVariant ให้อัตโนมัติ
                 content=ft.Container(
                     padding=20,
                     content=ft.Column(
                         [
-                            ft.Text("Reference & Input", weight=ft.FontWeight.BOLD),
-                            ft.Row(
-                                [
-                                    self.upload_btn,
-                                    ft.Text(
-                                        "รองรับ .png, .jpg (Max 2)",
-                                        size=12,
-                                        color=AppStyle.TEXT_SECONDARY,
-                                    ),
-                                ]
-                            ),
-                            self.image_preview_row,
-                            ft.Divider(),
-                            self.prompt_input,
-                            ft.Row([self.style_dropdown, self.ratio_dropdown]),
-                            ft.Divider(),
-                            ft.Text("AI Configuration", weight=ft.FontWeight.BOLD),
-                            ft.Row([self.provider_dropdown, self.model_dropdown]),
-                            ft.Row(
-                                [
-                                    ft.Text("Outputs:"),
-                                    self.count_label,
-                                    self.count_slider,
-                                ],
-                                alignment=ft.MainAxisAlignment.START,
-                            ),
-                            ft.Container(height=20),
-                            ft.Container(
-                                content=self.generate_btn, alignment=ft.alignment.center
-                            ),
-                            ft.Container(height=10),
+                            self.input_part,
+                            ft.Divider(height=30),
+                            self.config_part,
+                            ft.Container(height=15),
                             self.progress_bar,
                             ft.Container(
                                 content=self.status_text, alignment=ft.alignment.center
@@ -161,105 +95,184 @@ class CreateTab(ft.Column):
                 )
             ),
             ft.Container(height=20),
-            ft.Text("Generated Prompts", size=20, weight=ft.FontWeight.BOLD),
+            ft.Row(
+                [
+                    ft.Text("Generated Results", size=20, weight=ft.FontWeight.BOLD),
+                    ft.Row([self.download_all_btn, self.download_project_btn]),
+                ],
+                alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+            ),
             self.output_list,
             ft.Container(height=50),
         ]
 
     def did_mount(self):
-        self.page.overlay.append(self.file_picker)
+        self.page.overlay.extend(
+            [
+                self.input_part.file_picker,
+                self.save_all_images_picker,
+                self.save_project_zip_picker,
+            ]
+        )
         self.page.update()
 
-    # ... (Logic อื่นๆ เหมือนเดิม Copy มาได้เลย) ...
-    def on_provider_change(self, e):
-        selected_provider = self.provider_dropdown.value
-        new_models = AI_MODELS_MAP.get(selected_provider, [])
-        self.model_dropdown.options = [ft.dropdown.Option(m) for m in new_models]
-        if new_models:
-            self.model_dropdown.value = new_models[0]
-        else:
-            self.model_dropdown.value = None
-        self.update()
-
-    def on_slider_change(self, e):
-        self.count_label.value = f"จำนวน: {int(e.control.value)}"
-        self.update()
-
-    def on_file_picked(self, e: ft.FilePickerResultEvent):
+    # --- Event Logic ---
+    def on_file_picked(self, e):
         if e.files:
-            files = e.files[:2]
-            self.selected_files = [f.path for f in files]
-            self.image_preview_row.controls.clear()
-            for f in files:
-                self.image_preview_row.controls.append(
-                    ft.Container(
-                        content=ft.Image(
-                            src=f.path,
-                            width=80,
-                            height=80,
-                            fit=ft.ImageFit.COVER,
-                            border_radius=8,
-                        ),
-                        border=ft.border.all(1, AppStyle.BORDER),
-                        border_radius=8,
-                    )
-                )
-            self.update()
+            self.input_part.update_preview(e.files)
 
+    # Step 1: Text Gen
     async def on_click_generate(self, e):
-        if "Google" not in self.provider_dropdown.value:
+        if "Google" not in self.config_part.provider_dropdown.value:
             self.toast.show("Provider นี้ยังไม่เปิดให้บริการ", is_error=True)
             return
-        api_key = get_api_key()
-        if not api_key:
-            self.toast.show("ไม่พบ API Key", is_error=True)
+        keys = get_api_keys()
+        if not keys.get("gemini_text_key"):
+            self.toast.show("ไม่พบ Text API Key", is_error=True)
             return
-        if not self.selected_files and not self.prompt_input.value:
+
+        user_prompt = self.input_part.prompt_input.value
+        user_files = self.input_part.selected_files
+
+        if not user_files and not user_prompt:
             self.toast.show("ต้องใส่รูปหรือข้อความอย่างน้อย 1 อย่าง", is_error=True)
             return
 
-        self.generate_btn.disabled = True
-        self.generate_btn.text = "Generating..."
-        self.generate_btn.icon = ft.Icons.HOURGLASS_TOP
-        self.generate_btn.style.bgcolor = "surfaceVariant"  # สีตอน Disable
-
-        self.progress_bar.visible = True
-        self.status_text.value = "AI is thinking..."
+        self.set_loading(True, "Generating Prompts...")
+        self.config_part.generate_image_btn.visible = False
+        self.download_all_btn.visible = False
+        self.download_project_btn.visible = False
         self.output_list.controls.clear()
         self.update()
 
         try:
-            self.gemini_provider.set_api_key(api_key)
+            self.gemini_provider.set_api_key(keys.get("gemini_text_key"))
             prompts = await self.gemini_provider.generate_prompts_from_image(
-                model_name=self.model_dropdown.value,
-                image_paths=self.selected_files,
-                user_input=self.prompt_input.value,
-                style=self.style_dropdown.value,
-                ratio=self.ratio_dropdown.value,
-                count=int(self.count_slider.value),
+                model_name=self.config_part.model_dropdown.value,
+                image_paths=user_files,
+                user_input=user_prompt,
+                style=self.input_part.style_dropdown.value,
+                ratio=self.input_part.ratio_dropdown.value,
+                count=int(self.config_part.count_slider.value),
             )
-            for i, prompt in enumerate(prompts):
-                self.add_prompt_result(i + 1, prompt)
 
-            save_to_history(
-                provider=self.provider_dropdown.value,
-                model=self.model_dropdown.value,
-                input_text=self.prompt_input.value,
-                image_paths=self.selected_files,
-                prompts=prompts,
+            for i, p in enumerate(prompts):
+                self.output_list.controls.append(PromptBox(self.page, p, i + 1))
+
+            # Save History
+            self.current_history_id = save_to_history(
+                self.config_part.provider_dropdown.value,
+                self.config_part.model_dropdown.value,
+                user_prompt,
+                user_files,
+                prompts,
             )
-            self.status_text.value = "Done!"
+
+            # --- Trigger 1: ส่งสัญญาณบอก Gallery ให้โหลดรายการใหม่ ---
+            self.page.pubsub.send_all("refresh_gallery")
+
             self.toast.show(f"สร้างสำเร็จ {len(prompts)} รายการ")
-        except Exception as err:
-            self.status_text.value = f"Error: {err}"
-            self.toast.show("เกิดข้อผิดพลาดในการเชื่อมต่อ AI", is_error=True)
-        finally:
-            self.generate_btn.disabled = False
-            self.generate_btn.text = "Generate Prompts"
-            self.generate_btn.icon = AppStyle.ICON_GENERATE
-            self.generate_btn.style.bgcolor = AppStyle.BTN_PRIMARY  # คืนค่าสีหลัก
-            self.progress_bar.visible = False
-            self.update()
+            self.config_part.generate_image_btn.visible = True
 
-    def add_prompt_result(self, index, prompt_text):
-        self.output_list.controls.append(PromptBox(self.page, prompt_text, index))
+        except Exception as err:
+            self.toast.show(f"Error: {err}", is_error=True)
+        finally:
+            self.set_loading(False)
+
+    # Step 2: Image Gen
+    async def on_click_gen_images(self, e):
+        prompt_boxes = [
+            c for c in self.output_list.controls if isinstance(c, PromptBox)
+        ]
+        if not prompt_boxes:
+            return
+
+        keys = get_api_keys()
+        provider_name = self.config_part.img_provider_dropdown.value
+        active_provider = None
+
+        if "Google" in provider_name:
+            if not keys.get("gemini_image_key"):
+                self.toast.show("ไม่พบ Image API Key", is_error=True)
+                return
+            self.gemini_image_provider.set_api_key(keys.get("gemini_image_key"))
+            active_provider = self.gemini_image_provider
+        else:
+            active_provider = self.pollinations_provider
+
+        self.set_loading(True, "Generating Images...")
+        self.update()
+
+        tasks = []
+        for i, box in enumerate(prompt_boxes):
+            tasks.append(
+                self.generate_single_image(
+                    provider=active_provider,
+                    prompt_box=box,
+                    model=self.config_part.img_model_dropdown.value,
+                    index=i + 1,
+                )
+            )
+
+        await asyncio.gather(*tasks)
+
+        self.set_loading(False)
+        self.toast.show("สร้างรูปภาพครบแล้ว!")
+        self.download_all_btn.visible = True
+        self.download_project_btn.visible = True
+        self.update()
+
+    async def generate_single_image(self, provider, prompt_box, model, index=0):
+        try:
+            result = await provider.generate_image(
+                prompt=prompt_box.prompt_text,
+                model=model,
+                ref_image_paths=self.input_part.selected_files,
+                ratio=self.input_part.ratio_dropdown.value,
+            )
+
+            if isinstance(result, bytes):
+                prompt_box.set_image(result)
+
+                target_id = self.current_history_id
+                if not target_id:
+                    target_id = get_latest_history_id()
+
+                if target_id:
+                    update_history_images(target_id, index, result)
+                    # --- Trigger 2: ส่งสัญญาณบอก Gallery ให้อัปเดตรูป ---
+                    self.page.pubsub.send_all("refresh_gallery")
+
+            elif isinstance(result, str):
+                prompt_box.set_error(result)
+        except Exception as e:
+            print(f"Gen Error: {e}")
+            prompt_box.set_error(f"App Error: {str(e)}")
+
+    # Helpers
+    def set_loading(self, is_loading, text=""):
+        self.config_part.generate_text_btn.disabled = is_loading
+        self.config_part.generate_image_btn.disabled = is_loading
+        self.progress_bar.visible = is_loading
+        self.status_text.value = text if is_loading else ""
+        self.update()
+
+    def on_save_all_images_result(self, e):
+        if not e.path:
+            return
+        prompt_boxes = [
+            c for c in self.output_list.controls if isinstance(c, PromptBox)
+        ]
+        success, msg = create_images_zip(e.path, prompt_boxes)
+        self.toast.show(msg, is_error=not success)
+
+    def on_save_project_zip_result(self, e):
+        if not e.path:
+            return
+        prompt_boxes = [
+            c for c in self.output_list.controls if isinstance(c, PromptBox)
+        ]
+        success, msg = create_project_zip(
+            e.path, prompt_boxes, self.input_part.selected_files
+        )
+        self.toast.show(msg, is_error=not success)
