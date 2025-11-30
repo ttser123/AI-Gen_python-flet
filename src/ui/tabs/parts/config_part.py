@@ -1,6 +1,7 @@
 import flet as ft
 from src.core.config import AI_MODELS_MAP, IMAGE_GEN_MODELS_MAP
 from src.core.styles import AppStyle
+from src.core.ollama_manager import load_ollama_settings
 
 
 class ConfigPart(ft.Column):
@@ -8,7 +9,7 @@ class ConfigPart(ft.Column):
         super().__init__()
 
         # --- Step 1: Text Gen Controls ---
-        provider_options = list(AI_MODELS_MAP.keys())
+        provider_options = list(AI_MODELS_MAP.keys()) + ["Ollama (Local)"]
 
         self.provider_dropdown = ft.Dropdown(
             label="1. Text Provider",
@@ -103,7 +104,7 @@ class ConfigPart(ft.Column):
             ft.Divider(height=30, thickness=1),
             ft.Row(
                 [
-                    ft.Icon(ft.Icons.LOOKS_TWO, color=AppStyle.BTN_ON_PRIMARY),
+                    ft.Icon(ft.Icons.LOOKS_TWO, color=AppStyle.BTN_PRIMARY),
                     ft.Text("Image Gen Config", weight=ft.FontWeight.BOLD, size=16),
                 ]
             ),
@@ -116,11 +117,31 @@ class ConfigPart(ft.Column):
 
     # --- Event Handlers ---
     def on_text_provider_change(self, e):
-        models = AI_MODELS_MAP.get(self.provider_dropdown.value, [])
-        self.model_dropdown.options = [
-            ft.dropdown.Option(key=m["id"], text=m["name"]) for m in models
-        ]
-        self.model_dropdown.value = models[0]["id"] if models else None
+        selected_provider = self.provider_dropdown.value
+
+        if selected_provider == "Ollama (Local)":
+            # โหลดจากไฟล์ Setting ที่เราทำไว้
+            settings = load_ollama_settings()
+            models = settings.get("enabled_models", [])
+
+            # ถ้าไม่มีโมเดล ให้แจ้งเตือนใน Dropdown
+            if not models:
+                models = ["Please scan models in Settings first"]
+
+            # แปลงเป็น Dropdown Option (key กับ text เหมือนกัน)
+            self.model_dropdown.options = [
+                ft.dropdown.Option(key=m, text=m) for m in models
+            ]
+            self.model_dropdown.value = models[0]
+
+        else:
+            # Logic เดิมของ Google/OpenAI
+            models = AI_MODELS_MAP.get(selected_provider, [])
+            self.model_dropdown.options = [
+                ft.dropdown.Option(key=m["id"], text=m["name"]) for m in models
+            ]
+            self.model_dropdown.value = models[0]["id"] if models else None
+
         self.update()
 
     def on_img_provider_change(self, e):

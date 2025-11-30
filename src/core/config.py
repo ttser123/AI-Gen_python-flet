@@ -13,9 +13,11 @@ AI_MODELS_MAP = {
         {"id": "gemini-2.0-flash", "name": "Gemini 2.0 Flash"},
         {"id": "gemini-2.0-flash-lite", "name": "Gemini 2.0 Flash Lite"},
     ],
-    "OpenAI (Coming Soon)": [
-        {"id": "gpt-4o", "name": "GPT-4o"},
-        {"id": "gpt-4-turbo", "name": "GPT-4 Turbo"},
+    "OpenAI": [
+        {"id": "gpt-4o", "name": "ยังไม่เปิดให้ใช้"},
+    ],
+    "Claude": [
+        {"id": "claude-3-5-sonnet", "name": "ยังไม่เปิดให้ใช้"},
     ],
 }
 

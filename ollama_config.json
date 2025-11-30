@@ -1,0 +1,6 @@
+{
+    "base_url": "http://localhost:11434",
+    "selected_models": [
+        "llama3:latest"
+    ]
+}

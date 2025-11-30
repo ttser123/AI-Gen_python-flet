@@ -1,5 +1,6 @@
 import flet as ft
 import asyncio
+import requests  # ใช้สำหรับดึงข้อมูลจาก Ollama API
 
 # Logic & Utils
 from src.core.key_manager import get_api_keys
@@ -15,12 +16,15 @@ from src.logic.zip_manager import create_images_zip, create_project_zip
 from src.logic.providers.gemini_provider import GeminiProvider
 from src.logic.image_providers.gemini_image import GeminiImageProvider
 from src.logic.image_providers.pollinations import PollinationsProvider
+from src.logic.providers.ollama_provider import OllamaProvider
 
 # Components & Parts
 from src.ui.components.toast import CustomToast
 from src.ui.components.prompt_box import PromptBox
 from src.ui.tabs.parts.input_part import InputPart
 from src.ui.tabs.parts.config_part import ConfigPart
+from src.core.config import AI_MODELS_MAP, IMAGE_GEN_MODELS_MAP
+from src.core.ollama_manager import load_ollama_settings
 
 
 class CreateTab(ft.Column):
@@ -32,10 +36,11 @@ class CreateTab(ft.Column):
 
         # Init Services
         self.gemini_provider = GeminiProvider()
+        self.ollama_provider = OllamaProvider()
         self.gemini_image_provider = GeminiImageProvider()
         self.pollinations_provider = PollinationsProvider()
         self.toast = CustomToast(page)
-        self.current_history_id = None  # เก็บ ID ประวัติปัจจุบัน
+        self.current_history_id = None
 
         # --- Instantiate UI Parts ---
         self.input_part = InputPart(page, self.on_file_picked)
@@ -107,6 +112,7 @@ class CreateTab(ft.Column):
         ]
 
     def did_mount(self):
+        # Add Overlay logic
         self.page.overlay.extend(
             [
                 self.input_part.file_picker,
@@ -116,6 +122,49 @@ class CreateTab(ft.Column):
         )
         self.page.update()
 
+        # Optional: โหลดครั้งแรกตอนเปิดแอพเลยก็ได้
+        # self.update_models(is_silent=True)
+
+    # --- UPDATED METHOD: รองรับ Silent Update ---
+    def update_models(self, is_silent=True):
+        """
+        โหลดรายชื่อโมเดลจาก Settings (ที่ติ๊กเลือกไว้) มาแสดง
+        """
+        current_provider = self.config_part.provider_dropdown.value
+
+        if "Ollama" in current_provider:
+            # 1. โหลด Config
+            settings = load_ollama_settings()
+            selected_models = settings.get("selected_models", [])
+
+            if selected_models:
+                # ถ้ามีการเลือกไว้ ให้เอามาใส่ Dropdown เลย
+                self.config_part.model_dropdown.options = [
+                    ft.dropdown.Option(m) for m in selected_models
+                ]
+
+                # เช็ค value ปัจจุบัน
+                if self.config_part.model_dropdown.value not in selected_models:
+                    self.config_part.model_dropdown.value = selected_models[0]
+
+                self.config_part.model_dropdown.update()
+
+                if not is_silent:
+                    print(f"Loaded {len(selected_models)} models from settings.")
+
+            else:
+                # ถ้าใน Config เป็น List ว่างเปล่า (ผู้ใช้ยังไม่เคยไปติ๊ก)
+                # ให้แสดงข้อความเตือน หรือใส่ Option ว่างๆ ไว้
+                if not is_silent:
+                    self.toast.show("ยังไม่ได้เลือกโมเดลในหน้า Settings", is_error=True)
+
+                # Optional: Fallback ไปดึงสด (ถ้าต้องการ) แต่ตามโจทย์คือให้เลือกเอง
+                # self.config_part.model_dropdown.options = []
+                # self.config_part.model_dropdown.update()
+
+        else:
+            pass  # Provider อื่นไม่ต้องทำอะไร
+
     # --- Event Logic ---
     def on_file_picked(self, e):
         if e.files:
@@ -123,22 +172,16 @@ class CreateTab(ft.Column):
 
     # Step 1: Text Gen
     async def on_click_generate(self, e):
-        if "Google" not in self.config_part.provider_dropdown.value:
-            self.toast.show("Provider นี้ยังไม่เปิดให้บริการ", is_error=True)
-            return
-        keys = get_api_keys()
-        if not keys.get("gemini_text_key"):
-            self.toast.show("ไม่พบ Text API Key", is_error=True)
-            return
+        selected_provider = self.config_part.provider_dropdown.value
 
-        user_prompt = self.input_part.prompt_input.value
-        user_files = self.input_part.selected_files
-
-        if not user_files and not user_prompt:
+        if (
+            not self.input_part.selected_files
+            and not self.input_part.prompt_input.value
+        ):
             self.toast.show("ต้องใส่รูปหรือข้อความอย่างน้อย 1 อย่าง", is_error=True)
             return
 
-        self.set_loading(True, "Generating Prompts...")
+        self.set_loading(True, f"Generating with {selected_provider}...")
         self.config_part.generate_image_btn.visible = False
         self.download_all_btn.visible = False
         self.download_project_btn.visible = False
@@ -146,36 +189,60 @@ class CreateTab(ft.Column):
         self.update()
 
         try:
-            self.gemini_provider.set_api_key(keys.get("gemini_text_key"))
-            prompts = await self.gemini_provider.generate_prompts_from_image(
-                model_name=self.config_part.model_dropdown.value,
-                image_paths=user_files,
-                user_input=user_prompt,
-                style=self.input_part.style_dropdown.value,
-                ratio=self.input_part.ratio_dropdown.value,
-                count=int(self.config_part.count_slider.value),
-            )
+            # CASE A: Google
+            if "Google" in selected_provider:
+                keys = get_api_keys()
+                api_key = keys.get("gemini_text_key")
+                if not api_key:
+                    raise ValueError("ไม่พบ Text API Key")
+                self.gemini_provider.set_api_key(api_key)
+                prompts = await self.gemini_provider.generate_prompts_from_image(
+                    model_name=self.config_part.model_dropdown.value,
+                    image_paths=self.input_part.selected_files,
+                    user_input=self.input_part.prompt_input.value,
+                    style=self.input_part.style_dropdown.value,
+                    ratio=self.input_part.ratio_dropdown.value,
+                    count=int(self.config_part.count_slider.value),
+                )
+
+            # CASE B: Ollama
+            elif "Ollama" in selected_provider:
+                settings = load_ollama_settings()
+                self.ollama_provider.base_url = settings.get(
+                    "base_url", "http://localhost:11434"
+                )
+                prompts = await self.ollama_provider.generate_prompts_from_image(
+                    model=self.config_part.model_dropdown.value,
+                    image_paths=self.input_part.selected_files,
+                    user_input=self.input_part.prompt_input.value,
+                    style=self.input_part.style_dropdown.value,
+                    ratio=self.input_part.ratio_dropdown.value,
+                    count=int(self.config_part.count_slider.value),
+                )
+            else:
+                raise ValueError("Provider ไม่ถูกต้อง")
+
+            # Common Output
+            if not prompts or (len(prompts) == 1 and "Error" in prompts[0]):
+                raise ValueError(prompts[0] if prompts else "No response")
 
             for i, p in enumerate(prompts):
                 self.output_list.controls.append(PromptBox(self.page, p, i + 1))
 
-            # Save History
             self.current_history_id = save_to_history(
-                self.config_part.provider_dropdown.value,
+                selected_provider,
                 self.config_part.model_dropdown.value,
-                user_prompt,
-                user_files,
+                self.input_part.prompt_input.value,
+                self.input_part.selected_files,
                 prompts,
             )
-
-            # --- Trigger 1: ส่งสัญญาณบอก Gallery ให้โหลดรายการใหม่ ---
             self.page.pubsub.send_all("refresh_gallery")
-
             self.toast.show(f"สร้างสำเร็จ {len(prompts)} รายการ")
             self.config_part.generate_image_btn.visible = True
 
         except Exception as err:
             self.toast.show(f"Error: {err}", is_error=True)
+            self.status_text.value = "Generation Failed"
         finally:
             self.set_loading(False)
 
@@ -215,7 +282,6 @@ class CreateTab(ft.Column):
             )
 
         await asyncio.gather(*tasks)
-
         self.set_loading(False)
         self.toast.show("สร้างรูปภาพครบแล้ว!")
         self.download_all_btn.visible = True
@@ -233,17 +299,12 @@ class CreateTab(ft.Column):
 
             if isinstance(result, bytes):
                 prompt_box.set_image(result)
-
                 target_id = self.current_history_id
                 if not target_id:
                     target_id = get_latest_history_id()
-
                 if target_id:
-                    # --- แก้ตรงนี้: ส่ง image_model=model ไปด้วย ---
                     update_history_images(target_id, index, result, image_model=model)
-
                     self.page.pubsub.send_all("refresh_gallery")
-
             elif isinstance(result, str):
                 prompt_box.set_error(result)
         except Exception as e:

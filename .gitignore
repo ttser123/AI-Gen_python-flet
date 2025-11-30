@@ -10,3 +10,5 @@ api_key.json
 theme.json
 # Virtual environments
 .venv
+history_images
+ollama_settings.json
