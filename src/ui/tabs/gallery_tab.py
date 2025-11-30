@@ -20,7 +20,12 @@ class GalleryTab(ft.Column):
         self.item_to_delete = None
         self.item_to_zip = None
 
+        # 1. สร้าง Picker
         self.save_zip_picker = ft.FilePicker(on_result=self.on_save_zip_result)
+
+        # --- FIX: ย้ายมาใส่ตรงนี้ (ลงทะเบียนทันที) ---
+        self.page.overlay.append(self.save_zip_picker)
+        # ----------------------------------------
 
         self.history_list = ft.Column(spacing=20)
         self.no_data_text = ft.Text(
@@ -60,7 +65,6 @@ class GalleryTab(ft.Column):
             self.history_list,
         ]
 
-        # Dialogs
         self.delete_confirm_dialog = ft.AlertDialog(
             modal=True,
             title=ft.Text("ยืนยันการลบ"),
@@ -91,19 +95,16 @@ class GalleryTab(ft.Column):
         )
 
     def did_mount(self):
-        # 1. Register Pickers
-        self.page.overlay.append(self.save_zip_picker)
-        # 2. โหลดข้อมูลครั้งแรก
+        # 2. โหลดข้อมูล
         self.refresh_gallery()
-        # 3. --- เริ่มฟังคำสั่ง Update (Subscribe) ---
+
+        # 3. Subscribe (ย้าย Picker ออกไปแล้ว เหลือแค่นี้)
         self.page.pubsub.subscribe(self.on_message)
 
     def will_unmount(self):
-        # เลิกฟังเมื่อ Tab ถูกทำลาย (Good Practice)
         self.page.pubsub.unsubscribe_all()
 
     def on_message(self, message):
-        # ถ้าได้รับสัญญาณ "refresh_gallery" ให้โหลดใหม่ทันที
         if message == "refresh_gallery":
             self.refresh_gallery()
 
@@ -123,14 +124,19 @@ class GalleryTab(ft.Column):
 
     def create_history_card(self, item):
         prompts_col = ft.Column()
+
+        # 1. Load Image Map
         img_map = {}
         if "generated_images" in item:
             for img in item["generated_images"]:
                 img_map[img["index"]] = img["path"]
 
+        # 2. Build Prompts & Images List
         for i, p in enumerate(item["prompts"]):
             idx = i + 1
             pbox = PromptBox(self.page, prompt_text=p, index=idx)
+
+            # Load Image if exists
             if idx in img_map:
                 try:
                     with open(img_map[idx], "rb") as f:
@@ -138,8 +144,38 @@ class GalleryTab(ft.Column):
                         pbox.set_image(img_bytes, run_update=False)
                 except:
                     pass
+
             prompts_col.controls.append(pbox)
 
+        # 3. Create Badges (Text & Image)
+        model_badges = [
+            ft.Container(
+                content=ft.Text(
+                    f"Text: {item.get('model', 'Unknown')}",
+                    size=10,
+                    color="onSecondaryContainer",
+                ),
+                bgcolor="secondaryContainer",
+                padding=5,
+                border_radius=5,
+            )
+        ]
+
+        if item.get("image_model"):
+            model_badges.append(
+                ft.Container(
+                    content=ft.Text(
+                        f"Img: {item['image_model']}",
+                        size=10,
+                        color="onTertiaryContainer",
+                    ),
+                    bgcolor="tertiaryContainer",
+                    padding=5,
+                    border_radius=5,
+                )
+            )
+
+        # 4. Build Card
         card = ft.Card(
             content=ft.Container(
                 padding=15,
@@ -147,6 +183,7 @@ class GalleryTab(ft.Column):
                     [
                         ft.Row(
                             [
+                                # Row 1: Time + Badges
                                 ft.Row(
                                     [
                                         ft.Icon(
@@ -159,19 +196,13 @@ class GalleryTab(ft.Column):
                                             color=AppStyle.TEXT_SECONDARY,
                                             size=12,
                                         ),
-                                        ft.Container(width=10),
-                                        ft.Container(
-                                            content=ft.Text(
-                                                item["model"],
-                                                size=10,
-                                                color="onSecondaryContainer",
-                                            ),
-                                            bgcolor="secondaryContainer",
-                                            padding=5,
-                                            border_radius=5,
-                                        ),
+                                        ft.Container(width=5),
+                                        # --- จุดสำคัญ: เอา Badge ทั้งหมดมาใส่ตรงนี้ ---
+                                        *model_badges,
+                                        # ----------------------------------------
                                     ]
                                 ),
+                                # Row 2: Action Buttons
                                 ft.Row(
                                     [
                                         ft.IconButton(
@@ -218,7 +249,7 @@ class GalleryTab(ft.Column):
         )
         return card
 
-    # ... (Logic Zip และ Dialogs เหมือนเดิม ไม่มีการเปลี่ยนแปลง) ...
+    # ... (ส่วน Logic อื่นๆ เหมือนเดิม ไม่ต้องแก้) ...
     def download_project_zip(self, item):
         self.item_to_zip = item
         filename = f"project_{item['id']}.zip"

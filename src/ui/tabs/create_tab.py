@@ -239,8 +239,9 @@ class CreateTab(ft.Column):
                     target_id = get_latest_history_id()
 
                 if target_id:
-                    update_history_images(target_id, index, result)
-                    # --- Trigger 2: ส่งสัญญาณบอก Gallery ให้อัปเดตรูป ---
+                    # --- แก้ตรงนี้: ส่ง image_model=model ไปด้วย ---
+                    update_history_images(target_id, index, result, image_model=model)
+
                     self.page.pubsub.send_all("refresh_gallery")
 
             elif isinstance(result, str):

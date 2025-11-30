@@ -154,6 +154,14 @@ class PromptBox(ft.Container):
     # ... (Save Logic เหมือนเดิม) ...
     def open_save_dialog(self, e):
         if self.current_image_bytes:
+            # 1. เช็คความชัวร์ว่า Picker อยู่ใน Overlay ไหม
+            if self.save_file_picker not in self.page.overlay:
+                self.page.overlay.append(self.save_file_picker)
+
+            # 2. *** สำคัญมาก ***: สั่ง update page เพื่อลงทะเบียน Picker ก่อนเรียกใช้
+            self.page.update()
+
+            # 3. เปิด Dialog
             filename = f"prompt_{self.index if self.index else 'gen'}.png"
             self.save_file_picker.save_file(
                 dialog_title="Save Image",
