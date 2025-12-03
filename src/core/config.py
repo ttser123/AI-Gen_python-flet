@@ -38,6 +38,14 @@ IMAGE_GEN_MODELS_MAP = {
     ],
 }
 
+# === Image Edit Models ===
+IMAGE_EDIT_MODELS_MAP = {
+    "Google (Gemini/Imagen)": [
+        {"id": "gemini-2.5-flash-image", "name": "Nano Banana"},
+        {"id": "gemini-3-pro-image-preview", "name": "Nano Banana Pro"},
+    ]
+}
+
 # === Helper for Settings Tab (Flat list of display names) ===
 SUPPORTED_MODELS = []
 for category in [AI_MODELS_MAP, IMAGE_GEN_MODELS_MAP]:

@@ -20,19 +20,21 @@ class ConfigPart(ft.Column):
             border_color=AppStyle.BORDER_DIM,
         )
 
-        # โหลดโมเดลเริ่มต้น
-        initial_text_models = AI_MODELS_MAP[provider_options[0]]
+        # ... (ส่วนสร้าง model_dropdown และปุ่มต่างๆ เหมือนเดิม ไม่ต้องแก้) ...
+        # (Copy โค้ดเดิมส่วน UI มาวางได้เลยครับ)
+        # -------------------------------------------------------------
+
+        # ใส่ Logic UI เดิมลงไปตรงนี้ (เพื่อความกระชับผมขอละไว้)
         self.model_dropdown = ft.Dropdown(
             label="Text Model",
             options=[
                 ft.dropdown.Option(key=m["id"], text=m["name"])
-                for m in initial_text_models
+                for m in AI_MODELS_MAP[provider_options[0]]
             ],
-            value=initial_text_models[0]["id"],  # ใช้ ID เป็นค่า Value
+            value=AI_MODELS_MAP[provider_options[0]][0]["id"],
             expand=True,
             border_color=AppStyle.BORDER_DIM,
         )
-
         self.count_slider = ft.Slider(
             min=1,
             max=30,
@@ -42,7 +44,6 @@ class ConfigPart(ft.Column):
             on_change=self.on_slider_change,
         )
         self.count_label = ft.Text("จำนวน: 3")
-
         self.generate_text_btn = ft.ElevatedButton(
             "Generate Prompts (Step 1)",
             icon=AppStyle.ICON_GENERATE,
@@ -53,9 +54,8 @@ class ConfigPart(ft.Column):
             width=250,
         )
 
-        # --- Step 2: Image Gen Controls ---
+        # Step 2 Image Gen (เหมือนเดิม)
         img_providers = list(IMAGE_GEN_MODELS_MAP.keys())
-
         self.img_provider_dropdown = ft.Dropdown(
             label="2. Image Provider",
             options=[ft.dropdown.Option(p) for p in img_providers],
@@ -64,19 +64,16 @@ class ConfigPart(ft.Column):
             expand=True,
             border_color=AppStyle.BORDER_DIM,
         )
-
-        initial_img_models = IMAGE_GEN_MODELS_MAP[img_providers[0]]
         self.img_model_dropdown = ft.Dropdown(
             label="Image Model",
             options=[
                 ft.dropdown.Option(key=m["id"], text=m["name"])
-                for m in initial_img_models
+                for m in IMAGE_GEN_MODELS_MAP[img_providers[0]]
             ],
-            value=initial_img_models[0]["id"],  # ใช้ ID
+            value=IMAGE_GEN_MODELS_MAP[img_providers[0]][0]["id"],
             expand=True,
             border_color=AppStyle.BORDER_DIM,
         )
-
         self.generate_image_btn = ft.ElevatedButton(
             "Generate Images (Step 2)",
             icon=AppStyle.ICON_IMAGE,
@@ -104,7 +101,7 @@ class ConfigPart(ft.Column):
             ft.Divider(height=30, thickness=1),
             ft.Row(
                 [
-                    ft.Icon(ft.Icons.LOOKS_TWO, color=AppStyle.BTN_PRIMARY),
+                    ft.Icon(ft.Icons.LOOKS_TWO, color=AppStyle.BTN_SECONDARY),
                     ft.Text("Image Gen Config", weight=ft.FontWeight.BOLD, size=16),
                 ]
             ),
@@ -115,34 +112,58 @@ class ConfigPart(ft.Column):
             ),
         ]
 
-    # --- Event Handlers ---
-    def on_text_provider_change(self, e):
-        selected_provider = self.provider_dropdown.value
+    # --- ส่วนสำคัญ: Lifecycle & Logic ---
 
-        if selected_provider == "Ollama (Local)":
-            # โหลดจากไฟล์ Setting ที่เราทำไว้
-            settings = load_ollama_settings()
-            models = settings.get("enabled_models", [])
+    def did_mount(self):
+        # Subscribe รับข่าวสาร
+        self.page.pubsub.subscribe(self.on_message)
 
-            # ถ้าไม่มีโมเดล ให้แจ้งเตือนใน Dropdown
-            if not models:
-                models = ["Please scan models in Settings first"]
+    def will_unmount(self):
+        self.page.pubsub.unsubscribe_all()
 
-            # แปลงเป็น Dropdown Option (key กับ text เหมือนกัน)
+    def on_message(self, message):
+        # ถ้าหน้า Setting บันทึกเสร็จ -> บังคับโหลดใหม่ทันที
+        if message == "refresh_ollama_models":
+            if self.provider_dropdown.value == "Ollama (Local)":
+                self.load_ollama_models()
+
+    def load_ollama_models(self):
+        """โหลดรายชื่อจากไฟล์สดๆ"""
+        # 1. โหลดไฟล์ใหม่ทุกครั้งที่เรียก (สำคัญ!)
+        settings = load_ollama_settings()
+        models = settings.get("selected_models", [])  # ใช้ key 'selected_models'
+
+        if not models:
+            # กรณีไม่มีข้อมูลในไฟล์เลย
+            self.model_dropdown.options = [
+                ft.dropdown.Option("Please scan models in Settings first")
+            ]
+            self.model_dropdown.value = "Please scan models in Settings first"
+        else:
+            # มีข้อมูล -> ใส่ Dropdown
             self.model_dropdown.options = [
                 ft.dropdown.Option(key=m, text=m) for m in models
             ]
-            self.model_dropdown.value = models[0]
+            # เลือกตัวแรก (ถ้าค่าเดิมไม่อยู่ในลิสต์ใหม่)
+            if self.model_dropdown.value not in models:
+                self.model_dropdown.value = models[0]
 
+        self.model_dropdown.update()
+
+    def on_text_provider_change(self, e):
+        selected = self.provider_dropdown.value
+
+        if selected == "Ollama (Local)":
+            # เรียกฟังก์ชันโหลดสด
+            self.load_ollama_models()
         else:
             # Logic เดิมของ Google/OpenAI
-            models = AI_MODELS_MAP.get(selected_provider, [])
+            models = AI_MODELS_MAP.get(selected, [])
             self.model_dropdown.options = [
                 ft.dropdown.Option(key=m["id"], text=m["name"]) for m in models
             ]
             self.model_dropdown.value = models[0]["id"] if models else None
-
-        self.update()
+            self.model_dropdown.update()
 
     def on_img_provider_change(self, e):
         models = IMAGE_GEN_MODELS_MAP.get(self.img_provider_dropdown.value, [])

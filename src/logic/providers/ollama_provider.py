@@ -26,16 +26,20 @@ class OllamaProvider:
             if img_str:
                 images_b64.append(img_str)
 
-        # 2. ฟังก์ชันย่อย: สร้าง 1 Prompt (เราจะเรียกใช้ฟังก์ชันนี้วนลูป)
+        # 2. ฟังก์ชันย่อย: สร้าง 1 Prompt
         async def generate_single_prompt(index):
-            # Prompt ที่กำชับให้ตอบแค่เนื้อหา
+            # สั่งให้ AI โฟกัสแค่ "เนื้อหา" ไม่ต้องสน Format มาก เดี๋ยวเราจัดเอง
             full_prompt = (
-                f"You are an expert creative writer. "
-                f"Analyze the image and user request: '{user_input}'. "
-                f"Style: {style}. Aspect Ratio: {ratio}. "
-                f"Write ONE highly detailed, descriptive image generation prompt (Variation {index+1}). "
-                f"CRITICAL RULES: Do not use conversational filler (e.g., 'Here is a prompt', 'Sure'). "
-                f"Do not number the output. Return ONLY the prompt text."
+                f"Act as a professional prompt engineer. "
+                f"Analyze the input and write a CONCISE visual description for image generation. "
+                f"User Request: '{user_input}'. "
+                f"Variation: {index + 1}. "
+                f"REQUIREMENTS: "
+                f"- Describe ONLY the key visual elements (subject, lighting, mood). "
+                f"- Keep it under 40 words. "  # <-- จำกัดจำนวนคำ
+                f"- Be direct and specific. No flowery language. "
+                f"- Do NOT mention aspect ratio or style keywords (I will add them). "
+                f"- Start directly with the description."
             )
 
             payload = {
@@ -44,14 +48,13 @@ class OllamaProvider:
                 "stream": False,
                 "images": images_b64 if images_b64 else None,
                 "options": {
-                    "temperature": 0.8,  # เพิ่มความหลากหลายในแต่ละรอบ
-                    "num_predict": 512,
+                    "temperature": 0.9,
+                    "num_predict": 100,  # <-- ลด Max Tokens ลงเพื่อให้ตอบสั้นลง (เดิม 512)
                 },
             }
 
             url = f"{self.base_url}/api/generate"
 
-            # ใช้ Timeout นานหน่อยเผื่อเครื่องช้า
             async with httpx.AsyncClient(timeout=120.0) as client:
                 try:
                     response = await client.post(url, json=payload)
@@ -59,17 +62,26 @@ class OllamaProvider:
                         result = response.json()
                         text = result.get("response", "").strip()
 
-                        # --- Cleaning Logic (ทำความสะอาดข้อความ) ---
-                        # ลบเครื่องหมายคำพูดหัวท้าย
+                        # --- Cleaning Logic ---
+                        # ลบเครื่องหมายคำพูด
                         if text.startswith(('"', "'")):
                             text = text[1:-1]
-                        # ลบคำนำหน้าเช่น "Here is a prompt:"
+                        # ลบคำนำหน้าขยะ
                         if ":" in text and len(text.split(":")[0]) < 20:
                             text = text.split(":", 1)[-1].strip()
-                        # ลบ Markdown Bold (**...**)
-                        text = text.replace("**", "")
+                        # ลบ Markdown Bold
+                        text = text.replace("**", "").replace("*", "")
 
-                        return text
+                        # ลบจุด fullstop ท้ายประโยค (เพื่อความสวยงามตอนต่อ string)
+                        if text.endswith("."):
+                            text = text[:-1]
+
+                        # --- FORMATTING (หัวใจสำคัญ) ---
+                        # จัดรูปแบบมาตรฐาน: Style + เนื้อหา + Aspect Ratio
+                        # ตัวอย่าง: "Cinematic, [Detailed Description], 16:9 aspect ratio"
+                        final_prompt = f"{style}, {text}, {ratio} aspect ratio"
+
+                        return final_prompt
                     else:
                         return f"Error {response.status_code}"
                 except Exception as e:
@@ -78,10 +90,7 @@ class OllamaProvider:
         # 3. วนลูปสร้างตามจำนวน Count (Parallel Requests)
         print(f"Ollama generating {count} prompts (Parallel Loop)...")
 
-        # สร้าง Task ตามจำนวนที่ขอ (เช่น 5 tasks)
         tasks = [generate_single_prompt(i) for i in range(count)]
-
-        # รันทุก Task พร้อมกัน (หรือเกือบพร้อมกัน)
         results = await asyncio.gather(*tasks)
 
         # กรองผลลัพธ์ที่ Error หรือว่างเปล่าทิ้ง

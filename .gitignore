@@ -12,3 +12,4 @@ theme.json
 .venv
 history_images
 ollama_settings.json
+ollama_config.json

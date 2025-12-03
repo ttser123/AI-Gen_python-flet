@@ -20,12 +20,12 @@ class GalleryTab(ft.Column):
         self.item_to_delete = None
         self.item_to_zip = None
 
+        # เก็บ References ของ Card ไว้เพื่อลบเฉพาะจุดได้ {history_id: card_control}
+        self.cards_map = {}
+
         # 1. สร้าง Picker
         self.save_zip_picker = ft.FilePicker(on_result=self.on_save_zip_result)
-
-        # --- FIX: ย้ายมาใส่ตรงนี้ (ลงทะเบียนทันที) ---
         self.page.overlay.append(self.save_zip_picker)
-        # ----------------------------------------
 
         self.history_list = ft.Column(spacing=20)
         self.no_data_text = ft.Text(
@@ -42,7 +42,7 @@ class GalleryTab(ft.Column):
             icon=AppStyle.ICON_REFRESH,
             tooltip="โหลดข้อมูลใหม่",
             icon_color=AppStyle.BTN_PRIMARY,
-            on_click=lambda _: self.refresh_gallery(),
+            on_click=lambda _: self.refresh_gallery(force=True),
         )
 
         self.controls = [
@@ -65,6 +65,7 @@ class GalleryTab(ft.Column):
             self.history_list,
         ]
 
+        # Dialogs
         self.delete_confirm_dialog = ft.AlertDialog(
             modal=True,
             title=ft.Text("ยืนยันการลบ"),
@@ -95,10 +96,7 @@ class GalleryTab(ft.Column):
         )
 
     def did_mount(self):
-        # 2. โหลดข้อมูล
-        self.refresh_gallery()
-
-        # 3. Subscribe (ย้าย Picker ออกไปแล้ว เหลือแค่นี้)
+        self.refresh_gallery(force=True)
         self.page.pubsub.subscribe(self.on_message)
 
     def will_unmount(self):
@@ -106,37 +104,70 @@ class GalleryTab(ft.Column):
 
     def on_message(self, message):
         if message == "refresh_gallery":
-            self.refresh_gallery()
+            # โหลดแบบเงียบๆ ไม่ต้อง Force Clear
+            self.refresh_gallery(force=False)
 
-    def refresh_gallery(self):
-        self.history_list.controls.clear()
+    def refresh_gallery(self, force=False):
+        """
+        Smart Refresh:
+        - force=True: ลบทุกอย่างแล้วโหลดใหม่ (ใช้ตอนเปิดแอพ หรือกดปุ่ม Refresh)
+        - force=False: (ใช้ตอน Auto Update) จะเช็คก่อนว่ามีอะไรใหม่ไหม ถ้ามีแค่เพิ่มเข้าไป
+        """
         data = load_history()
+
         if not data:
+            self.history_list.controls.clear()
             self.history_list.controls.append(
                 ft.Container(
                     content=self.no_data_text, alignment=ft.alignment.center, padding=50
                 )
             )
-        else:
+            self.cards_map = {}
+            self.update()
+            return
+
+        # เอา Text "ไม่มีข้อมูล" ออก ถ้ามีข้อมูลมาแล้ว
+        if len(self.history_list.controls) == 1 and isinstance(
+            self.history_list.controls[0].content, ft.Text
+        ):
+            self.history_list.controls.clear()
+
+        if force:
+            # แบบเดิม: ลบสร้างใหม่หมด (อาจกระพริบ แต่ชัวร์)
+            self.history_list.controls.clear()
+            self.cards_map = {}
             for item in data:
-                self.history_list.controls.append(self.create_history_card(item))
+                self.add_card_to_ui(item)
+        else:
+            # แบบใหม่: Smart Add (เพิ่มเฉพาะตัวที่ยังไม่มี)
+            # data[0] คือตัวใหม่สุด
+            # เช็คว่า ID ของตัวใหม่สุด มีอยู่ใน UI หรือยัง
+            newest_item = data[0]
+            if newest_item["id"] not in self.cards_map:
+                # ถ้ายังไม่มี ให้แทรกไว้บนสุด (index 0)
+                self.add_card_to_ui(newest_item, index=0)
+
         self.update()
+
+    def add_card_to_ui(self, item, index=None):
+        card = self.create_history_card(item)
+        self.cards_map[item["id"]] = card  # จำไว้ว่า ID นี้คือ Card ใบไหน
+
+        if index is not None:
+            self.history_list.controls.insert(index, card)
+        else:
+            self.history_list.controls.append(card)
 
     def create_history_card(self, item):
         prompts_col = ft.Column()
-
-        # 1. Load Image Map
         img_map = {}
         if "generated_images" in item:
             for img in item["generated_images"]:
                 img_map[img["index"]] = img["path"]
 
-        # 2. Build Prompts & Images List
         for i, p in enumerate(item["prompts"]):
             idx = i + 1
             pbox = PromptBox(self.page, prompt_text=p, index=idx)
-
-            # Load Image if exists
             if idx in img_map:
                 try:
                     with open(img_map[idx], "rb") as f:
@@ -144,10 +175,9 @@ class GalleryTab(ft.Column):
                         pbox.set_image(img_bytes, run_update=False)
                 except:
                     pass
-
             prompts_col.controls.append(pbox)
 
-        # 3. Create Badges (Text & Image)
+        # Badges
         model_badges = [
             ft.Container(
                 content=ft.Text(
@@ -160,7 +190,6 @@ class GalleryTab(ft.Column):
                 border_radius=5,
             )
         ]
-
         if item.get("image_model"):
             model_badges.append(
                 ft.Container(
@@ -175,7 +204,6 @@ class GalleryTab(ft.Column):
                 )
             )
 
-        # 4. Build Card
         card = ft.Card(
             content=ft.Container(
                 padding=15,
@@ -183,7 +211,6 @@ class GalleryTab(ft.Column):
                     [
                         ft.Row(
                             [
-                                # Row 1: Time + Badges
                                 ft.Row(
                                     [
                                         ft.Icon(
@@ -197,12 +224,9 @@ class GalleryTab(ft.Column):
                                             size=12,
                                         ),
                                         ft.Container(width=5),
-                                        # --- จุดสำคัญ: เอา Badge ทั้งหมดมาใส่ตรงนี้ ---
                                         *model_badges,
-                                        # ----------------------------------------
                                     ]
                                 ),
-                                # Row 2: Action Buttons
                                 ft.Row(
                                     [
                                         ft.IconButton(
@@ -249,7 +273,7 @@ class GalleryTab(ft.Column):
         )
         return card
 
-    # ... (ส่วน Logic อื่นๆ เหมือนเดิม ไม่ต้องแก้) ...
+    # ... (Zip Logic เหมือนเดิม) ...
     def download_project_zip(self, item):
         self.item_to_zip = item
         filename = f"project_{item['id']}.zip"
@@ -261,6 +285,7 @@ class GalleryTab(ft.Column):
             self.toast.show(msg, is_error=not success)
             self.item_to_zip = None
 
+    # --- Optimize Delete Logic ---
     def close_dialog(self, e):
         self.page.close(self.delete_confirm_dialog)
         self.page.close(self.clear_all_confirm_dialog)
@@ -270,10 +295,37 @@ class GalleryTab(ft.Column):
         self.page.open(self.delete_confirm_dialog)
 
     def confirm_delete_item(self, e):
-        if self.item_to_delete:
-            delete_history_item(self.item_to_delete)
-            self.toast.show("ลบรายการเรียบร้อย")
-            self.refresh_gallery()
+        """ลบแบบ Smart Remove (ไม่โหลดใหม่ทั้งหน้า)"""
+        target_id = self.item_to_delete
+        if target_id:
+            # 1. ลบจาก Database/File
+            delete_history_item(target_id)
+
+            # 2. ลบเฉพาะ Card นั้นออกจาก UI (ไม่ต้อง refresh_gallery ทั้งหมด)
+            if target_id in self.cards_map:
+                card_to_remove = self.cards_map[target_id]
+                try:
+                    self.history_list.controls.remove(card_to_remove)
+                    del self.cards_map[target_id]  # ลบออกจาก Map ด้วย
+
+                    # ถ้าลบจนหมดเกลี้ยง ให้โชว์ Text ว่าง
+                    if not self.history_list.controls:
+                        self.history_list.controls.append(
+                            ft.Container(
+                                content=self.no_data_text,
+                                alignment=ft.alignment.center,
+                                padding=50,
+                            )
+                        )
+
+                    self.history_list.update()  # อัปเดตแค่ List
+                    self.toast.show("ลบรายการเรียบร้อย")
+                except ValueError:
+                    # กันเหนียวเผื่อหาไม่เจอจริงๆ ค่อยโหลดใหม่
+                    self.refresh_gallery(force=True)
+            else:
+                self.refresh_gallery(force=True)
+
         self.page.close(self.delete_confirm_dialog)
 
     def show_clear_all_dialog(self, e):
@@ -281,6 +333,13 @@ class GalleryTab(ft.Column):
 
     def confirm_clear_all(self, e):
         clear_all_history()
+        self.history_list.controls.clear()
+        self.cards_map = {}
+        self.history_list.controls.append(
+            ft.Container(
+                content=self.no_data_text, alignment=ft.alignment.center, padding=50
+            )
+        )
+        self.history_list.update()
         self.toast.show("ลบประวัติทั้งหมดเรียบร้อย")
-        self.refresh_gallery()
         self.page.close(self.clear_all_confirm_dialog)

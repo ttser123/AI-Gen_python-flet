@@ -1,25 +1,35 @@
 import json
 import os
 
-CONFIG_FILE = "ollama_config.json"
+OLLAMA_SETTINGS_FILE = "ollama_settings.json"
+
+DEFAULT_SETTINGS = {
+    "base_url": "http://localhost:11434",
+    "selected_models": [],  # ใช้ชื่อนี้ให้ตรงกับ SettingsTab
+}
 
 
 def load_ollama_settings():
-    if not os.path.exists(CONFIG_FILE):
-        return {"base_url": "http://localhost:11434", "selected_models": []}
+    """โหลดค่า Setting"""
+    if not os.path.exists(OLLAMA_SETTINGS_FILE):
+        return DEFAULT_SETTINGS
     try:
-        with open(CONFIG_FILE, "r") as f:
-            return json.load(f)
+        with open(OLLAMA_SETTINGS_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+            # Merge กับ Default เผื่อ key หาย
+            return {**DEFAULT_SETTINGS, **data}
     except:
-        return {"base_url": "http://localhost:11434", "selected_models": []}
+        return DEFAULT_SETTINGS
 
 
-def save_ollama_settings(base_url, selected_models=None):
-    # ถ้าไม่ได้ส่ง list มา ให้ไปอ่านของเก่ามาใช้ (กันพลาด)
-    if selected_models is None:
-        current = load_ollama_settings()
-        selected_models = current.get("selected_models", [])
-
-    config = {"base_url": base_url, "selected_models": selected_models}
-    with open(CONFIG_FILE, "w") as f:
-        json.dump(config, f, indent=4)
+# ปรับแก้ให้รับ arguments 2 ตัว ตามที่ SettingsTab เรียกใช้
+def save_ollama_settings(base_url, selected_models):
+    """บันทึกค่าลงไฟล์ JSON"""
+    data = {"base_url": base_url, "selected_models": selected_models}
+    try:
+        with open(OLLAMA_SETTINGS_FILE, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=4, ensure_ascii=False)
+        return True
+    except Exception as e:
+        print(f"Error saving ollama settings: {e}")
+        return False

@@ -12,7 +12,6 @@ class GeminiImageProvider(BaseImageProvider):
 
     def set_api_key(self, api_key: str):
         self.api_key = api_key
-        # Init Client แบบใหม่
         self.client = genai.Client(api_key=self.api_key)
 
     async def generate_image(
@@ -78,3 +77,41 @@ class GeminiImageProvider(BaseImageProvider):
                 return "Error 429: Quota exceeded."
             else:
                 return f"Provider Error: {error_msg}"
+            pass
+
+
+async def edit_image(
+    self, base_image_bytes, mask_bytes, prompt, model="imagen-3.0-capability-001"
+):
+    """
+    ใช้สำหรับเปลี่ยนพื้นหลังโดยเฉพาะ (Inpainting)
+    """
+    if not self.client:
+        return "Error: API Key is missing."
+
+    try:
+        print(f"Editing image with model: {model} | prompt: {prompt}")
+
+        img_pil = PIL.Image.open(io.BytesIO(base_image_bytes))
+        mask_pil = PIL.Image.open(io.BytesIO(mask_bytes))
+
+        # ใช้ชื่อ model ที่รับเข้ามา
+        response = self.client.models.edit_image(
+            model=model,
+            image=img_pil,
+            mask=mask_pil,
+            prompt=prompt,
+            config=types.EditImageConfig(
+                number_of_images=1,
+                safety_filter_level="BLOCK_ONLY_HIGH",
+                output_mime_type="image/png",
+            ),
+        )
+
+        if response.generated_images:
+            return response.generated_images[0].image.image_bytes
+        else:
+            return "Error: No edited image returned."
+
+    except Exception as e:
+        return f"Provider Error (Edit): {str(e)}"
